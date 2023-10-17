@@ -4,6 +4,7 @@ import enum CoreBluetooth.CBManagerState
 import var CoreBluetooth.CBAdvertisementDataServiceDataKey
 import var CoreBluetooth.CBAdvertisementDataServiceUUIDsKey
 import var CoreBluetooth.CBAdvertisementDataManufacturerDataKey
+import var CoreBluetooth.CBAdvertisementDataIsConnectable
 import var CoreBluetooth.CBAdvertisementDataLocalNameKey
 
 final class PluginController {
@@ -21,25 +22,9 @@ final class PluginController {
             }
         }
     }
-    var discoveryQueue: [PlatformMethodResult] = [];
+    var messageQueue: [CharacteristicValueInfo] = []
     var connectedDeviceSink: EventSink?
-
-    var valueQueue: [PlatformMethodResult] = [];
     var characteristicValueUpdateSink: EventSink?
-
-    func flushQueue(sink: EventSink, queue: inout [PlatformMethodResult]) {
-        queue.forEach(sink.add)
-        queue.removeAll()
-    }
-
-    func sinkOrQueue(sink: EventSink?, queue: inout [PlatformMethodResult], value: PlatformMethodResult ) {
-        if let sink = sink {
-            flushQueue(sink: sink, queue: &queue)
-            sink.add(value)
-        } else {
-            queue.append(value)
-        }
-    }
 
     func initialize(name: String, completion: @escaping PlatformMethodCompletionHandler) {
         if let central = central {
@@ -57,13 +42,20 @@ final class PluginController {
 
                 let serviceData = advertisementData[CBAdvertisementDataServiceDataKey] as? ServiceData ?? [:]
                 let serviceUuids = advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID] ?? []
-                let manufacturerData = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data ?? Data();
-                let name = advertisementData[CBAdvertisementDataLocalNameKey] as? String ?? peripheral.name ?? String();
-
+                let isConnectable = (advertisementData[CBAdvertisementDataIsConnectable] as? NSNumber)?.boolValue
+                let manufacturerData = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data ?? Data()
+                let name = advertisementData[CBAdvertisementDataLocalNameKey] as? String ?? peripheral.name ?? String()
                 let deviceDiscoveryMessage = DeviceScanInfo.with {
                     $0.id = peripheral.identifier.uuidString
                     $0.name = name
                     $0.rssi = Int32(rssi)
+                    $0.isConnectable = IsConnectable()
+                    switch isConnectable {
+                    case .none:
+                      $0.isConnectable.code = 0
+                    case .some(let isConnectable):
+                      $0.isConnectable.code = isConnectable ? 2 : 1
+                    }
                     $0.serviceData = serviceData
                         .map { entry in
                             ServiceDataEntry.with {
@@ -99,9 +91,12 @@ final class PluginController {
                     }
                 }
 
-                context.sinkOrQueue(sink: context.connectedDeviceSink, queue: &context.discoveryQueue, value: .success(message))
+                context.connectedDeviceSink?.add(.success(message))
             },
             onServicesWithCharacteristicsInitialDiscovery: papply(weak: self) { context, central, peripheral, errors in
+                guard let sink = context.connectedDeviceSink
+                else { assert(false); return }
+
                 let message = DeviceInfo.with {
                     $0.id = peripheral.identifier.uuidString
                     $0.connectionState = encode(peripheral.state)
@@ -112,13 +107,16 @@ final class PluginController {
                         }
                     }
                 }
-                context.sinkOrQueue(sink: context.connectedDeviceSink, queue: &context.discoveryQueue, value: .success(message))
+
+                sink.add(.success(message))
             },
             onCharacteristicValueUpdate: papply(weak: self) { context, central, characteristic, value, error in
                 let message = CharacteristicValueInfo.with {
                     $0.characteristic = CharacteristicAddress.with {
                         $0.characteristicUuid = Uuid.with { $0.data = characteristic.id.data }
+                        $0.characteristicInstanceID = characteristic.instanceID
                         $0.serviceUuid = Uuid.with { $0.data = characteristic.serviceID.data }
+                        $0.serviceInstanceID = characteristic.serviceInstanceID
                         $0.deviceID = characteristic.peripheralID.uuidString
                     }
                     if let value = value {
@@ -131,7 +129,13 @@ final class PluginController {
                         }
                     }
                 }
-                context.sinkOrQueue(sink: context.characteristicValueUpdateSink, queue: &context.valueQueue, value: .success(message))
+                let sink = context.characteristicValueUpdateSink
+                if sink != nil {
+                    sink!.add(.success(message))
+                } else {
+                    // In case message arrives before sink is created
+                    context.messageQueue.append(message)
+                }
             }
         )
 
@@ -202,8 +206,7 @@ final class PluginController {
         let servicesWithCharacteristicsToDiscover: ServicesWithCharacteristicsToDiscover
         if args.hasServicesWithCharacteristicsToDiscover {
             let items = args.servicesWithCharacteristicsToDiscover.items.reduce(
-                into: [ServiceID: [CharacteristicID]](),
-                { dict, item in
+                into: [ServiceID: [CharacteristicID]](), { dict, item in
                     let serviceID = CBUUID(data: item.serviceID.data)
                     let characteristicIDs = item.characteristics.map { CBUUID(data: $0.data) }
 
@@ -219,12 +222,16 @@ final class PluginController {
 
         completion(.success(nil))
 
-        let message = DeviceInfo.with {
-            $0.id = args.deviceID
-            $0.connectionState = encode(.connecting)
+        if let sink = connectedDeviceSink {
+            let message = DeviceInfo.with {
+                $0.id = args.deviceID
+                $0.connectionState = encode(.connecting)
+            }
+            sink.add(.success(message))
+        } else {
+            print("Warning! No event channel set up to report a connection update")
         }
-        sinkOrQueue(sink: connectedDeviceSink, queue: &discoveryQueue, value: .success(message))
-        
+
         do {
             try central.connect(
                 to: deviceID,
@@ -232,6 +239,12 @@ final class PluginController {
                 timeout: timeout
             )
         } catch {
+            guard let sink = connectedDeviceSink
+            else {
+                print("Warning! No event channel set up to report a connection failure: \(error)")
+                return
+            }
+
             let message = DeviceInfo.with {
                 $0.id = args.deviceID
                 $0.connectionState = encode(.disconnected)
@@ -240,7 +253,8 @@ final class PluginController {
                     $0.message = "\(error)"
                 }
             }
-            sinkOrQueue(sink: connectedDeviceSink, queue: &discoveryQueue, value: .success(message))
+
+            sink.add(.success(message))
         }
     }
 
@@ -278,14 +292,16 @@ final class PluginController {
         func makeDiscoveredService(service: CBService) -> DiscoveredService {
             DiscoveredService.with {
                 $0.serviceUuid = Uuid.with { $0.data = service.uuid.data }
+                $0.serviceInstanceID = service.instanceId?.description ?? ""
                 $0.characteristicUuids = (service.characteristics ?? []).map { characteristic in
                     Uuid.with { $0.data = characteristic.uuid.data }
                 }
                 $0.characteristics = (service.characteristics ?? []).map { characteristic in
-                    DiscoveredCharacteristic.with{
-                        $0.characteristicID = Uuid.with{$0.data = characteristic.uuid.data}
+                    DiscoveredCharacteristic.with {
+                        $0.characteristicID = Uuid.with {$0.data = characteristic.uuid.data}
+                        $0.characteristicInstanceID = characteristic.instanceId?.description ?? ""
                         if characteristic.service?.uuid.data != nil {
-                            $0.serviceID = Uuid.with{$0.data = characteristic.service!.uuid.data}
+                            $0.serviceID = Uuid.with {$0.data = characteristic.service!.uuid.data}
                         }
                         $0.isReadable = characteristic.properties.contains(.read)
                         $0.isWritableWithResponse = characteristic.properties.contains(.write)
@@ -294,7 +310,7 @@ final class PluginController {
                         $0.isIndicatable = characteristic.properties.contains(.indicate)
                     }
                 }
- 
+
                 $0.includedServices = (service.includedServices ?? []).map(makeDiscoveredService)
             }
         }
@@ -315,6 +331,57 @@ final class PluginController {
         }
     }
 
+    func getDiscoveredServices(name: String, args: DiscoverServicesRequest, completion: @escaping PlatformMethodCompletionHandler) {
+        guard let central = central
+        else {
+            completion(.failure(PluginError.notInitialized.asFlutterError))
+            return
+        }
+
+        guard let deviceID = UUID(uuidString: args.deviceID)
+        else {
+            completion(.failure(PluginError.invalidMethodCall(method: name, details: "\"deviceID\" is invalid").asFlutterError))
+            return
+        }
+
+        func makeDiscoveredService(service: CBService) -> DiscoveredService {
+            DiscoveredService.with {
+                $0.serviceUuid = Uuid.with { $0.data = service.uuid.data }
+                $0.serviceInstanceID = service.instanceId?.description ?? ""
+                $0.characteristicUuids = (service.characteristics ?? []).map { characteristic in
+                    Uuid.with { $0.data = characteristic.uuid.data }
+                }
+                $0.characteristics = (service.characteristics ?? []).map { characteristic in
+                    DiscoveredCharacteristic.with {
+                        $0.characteristicID = Uuid.with {$0.data = characteristic.uuid.data}
+                        $0.characteristicInstanceID = characteristic.instanceId?.description ?? ""
+                        if characteristic.service?.uuid.data != nil {
+                            $0.serviceID = Uuid.with {$0.data = characteristic.service!.uuid.data}
+                        }
+                        $0.isReadable = characteristic.properties.contains(.read)
+                        $0.isWritableWithResponse = characteristic.properties.contains(.write)
+                        $0.isWritableWithoutResponse = characteristic.properties.contains(.writeWithoutResponse)
+                        $0.isNotifiable = characteristic.properties.contains(.notify)
+                        $0.isIndicatable = characteristic.properties.contains(.indicate)
+                    }
+                }
+
+                $0.includedServices = (service.includedServices ?? []).map(makeDiscoveredService)
+            }
+        }
+
+        do {
+            let peripheral = try central.peripheral(for: deviceID)
+            completion(.success(DiscoverServicesInfo.with {
+                        $0.deviceID = deviceID.uuidString
+                        $0.services = (peripheral.services ?? []).map(makeDiscoveredService)
+                    }))
+
+        } catch {
+            completion(.failure(PluginError.unknown(error).asFlutterError))
+        }
+    }
+
     func enableCharacteristicNotifications(name: String, args: NotifyCharacteristicRequest, completion: @escaping PlatformMethodCompletionHandler) {
         guard let central = central
         else {
@@ -322,7 +389,7 @@ final class PluginController {
             return
         }
 
-        guard let characteristic = QualifiedCharacteristicIDFactory().make(from: args.characteristic)
+        guard let characteristic = CharacteristicInstanceIDFactory().make(from: args.characteristic)
         else {
             completion(.failure(PluginError.invalidMethodCall(method: name, details: "characteristic, service, and peripheral IDs are required").asFlutterError))
             return
@@ -348,7 +415,7 @@ final class PluginController {
             return
         }
 
-        guard let characteristic = QualifiedCharacteristicIDFactory().make(from: args.characteristic)
+        guard let characteristic = CharacteristicInstanceIDFactory().make(from: args.characteristic)
         else {
             completion(.failure(PluginError.invalidMethodCall(method: name, details: "characteristic, service, and peripheral IDs are required").asFlutterError))
             return
@@ -374,7 +441,7 @@ final class PluginController {
             return
         }
 
-        guard let characteristic = QualifiedCharacteristicIDFactory().make(from: args.characteristic)
+        guard let characteristic = CharacteristicInstanceIDFactory().make(from: args.characteristic)
         else {
             completion(.failure(PluginError.invalidMethodCall(method: name, details: "characteristic, service, and peripheral IDs are required").asFlutterError))
             return
@@ -409,7 +476,7 @@ final class PluginController {
             return
         }
 
-        guard let characteristic = QualifiedCharacteristicIDFactory().make(from: args.characteristic)
+        guard let characteristic = CharacteristicInstanceIDFactory().make(from: args.characteristic)
         else {
             completion(.failure(PluginError.invalidMethodCall(method: name, details: "characteristic, service, and peripheral IDs are required").asFlutterError))
             return
@@ -418,14 +485,10 @@ final class PluginController {
         do {
             try central.writeWithResponse(
                 value: args.value,
-                characteristic: QualifiedCharacteristic(id: characteristic.id, serviceID: characteristic.serviceID, peripheralID: characteristic.peripheralID),
+                characteristic: characteristic,
                 completion: { _, characteristic, error in
                     let result = WriteCharacteristicInfo.with {
-                        $0.characteristic = CharacteristicAddress.with {
-                            $0.characteristicUuid = Uuid.with { $0.data = characteristic.id.data }
-                            $0.serviceUuid = Uuid.with { $0.data = characteristic.serviceID.data }
-                            $0.deviceID = characteristic.peripheralID.uuidString
-                        }
+                        $0.characteristic = args.characteristic
                         if let error = error {
                             $0.failure = GenericFailure.with {
                                 $0.code = Int32(WriteCharacteristicFailure.unknown.rawValue)
@@ -449,25 +512,25 @@ final class PluginController {
             completion(.success(result))
         }
     }
-    
+
     func writeCharacteristicWithoutResponse(name: String, args: WriteCharacteristicRequest, completion: @escaping PlatformMethodCompletionHandler) {
         guard let central = central
         else {
             completion(.failure(PluginError.notInitialized.asFlutterError))
             return
         }
-        
-        guard let characteristic = QualifiedCharacteristicIDFactory().make(from: args.characteristic)
+
+        guard let characteristic = CharacteristicInstanceIDFactory().make(from: args.characteristic)
         else {
             completion(.failure(PluginError.invalidMethodCall(method: name, details: "characteristic, service, and peripheral IDs are required").asFlutterError))
             return
         }
-        
+
         let result: WriteCharacteristicInfo
         do {
             try central.writeWithoutResponse(
                 value: args.value,
-                characteristic: QualifiedCharacteristic(id: characteristic.id, serviceID: characteristic.serviceID, peripheralID: characteristic.peripheralID)
+                characteristic: characteristic
             )
             result = WriteCharacteristicInfo.with {
                 $0.characteristic = args.characteristic

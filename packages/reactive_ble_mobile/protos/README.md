@@ -15,10 +15,10 @@ brew install swift-protobuf
 3. If you don't have Dart SDK on your computer please install it.
 
 ```sh
-brew isntall dart
+brew install dart
 ```
 
-4. Run `pub global activate protoc_plugin`
+4. Run `dart pub global activate protoc_plugin`
 5. OPTIONAL Add plugin path to `PATH` environment variable
 6. Run the following command from the "protos" directory
 

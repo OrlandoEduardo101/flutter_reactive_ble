@@ -52,12 +52,10 @@ public class SwiftReactiveBlePlugin: NSObject, FlutterPlugin {
             context: context,
             onListen: { context, sink in
                 context.connectedDeviceSink = sink
-                context.flushQueue(sink: sink, queue: &context.discoveryQueue)
                 return nil
             },
             onCancel: { context in
                 context.connectedDeviceSink = nil
-                context.discoveryQueue.removeAll()
                 return nil
             }
         )
@@ -69,11 +67,14 @@ public class SwiftReactiveBlePlugin: NSObject, FlutterPlugin {
             context: context,
             onListen: { context, sink in
                 context.characteristicValueUpdateSink = sink
-                context.flushQueue(sink: sink, queue: &context.valueQueue)
+                context.messageQueue.forEach { msg in
+                    sink.add(.success(msg))
+                }
+                context.messageQueue.removeAll()
                 return nil
             },
             onCancel: { context in
-                context.valueQueue.removeAll()
+                context.messageQueue.removeAll()
                 context.characteristicValueUpdateSink = nil
                 return nil
             }
@@ -119,6 +120,9 @@ public class SwiftReactiveBlePlugin: NSObject, FlutterPlugin {
         AnyPlatformMethod(UnaryPlatformMethod(name: "discoverServices") { (name, context, args: DiscoverServicesRequest, completion) in
             context.discoverServices(name: name, args: args, completion: completion)
         }),
+        AnyPlatformMethod(UnaryPlatformMethod(name: "getDiscoveredServices") { (name, context, args: DiscoverServicesRequest, completion) in
+            context.getDiscoveredServices(name: name, args: args, completion: completion)
+        }),
         AnyPlatformMethod(UnaryPlatformMethod(name: "readNotifications") { (name, context, args: NotifyCharacteristicRequest, completion) in
             context.enableCharacteristicNotifications(name: name, args: args, completion: completion)
         }),
@@ -136,7 +140,7 @@ public class SwiftReactiveBlePlugin: NSObject, FlutterPlugin {
         }),
         AnyPlatformMethod(UnaryPlatformMethod(name: "negotiateMtuSize") { (name, context, args: NegotiateMtuRequest, completion) in
             context.reportMaximumWriteValueLength(name: name, args: args, completion: completion)
-        }),
+        })
     ])
 
     public func handle(_ call: FlutterMethodCall, result completion: @escaping FlutterResult) {

@@ -6,6 +6,62 @@ part of 'discovered_device.dart';
 // FunctionalDataGenerator
 // **************************************************************************
 
+abstract class $ScanResult {
+  const $ScanResult();
+
+  Result<DiscoveredDevice, GenericFailure<ScanFailure>?> get result;
+
+  ScanResult copyWith({
+    Result<DiscoveredDevice, GenericFailure<ScanFailure>?>? result,
+  }) =>
+      ScanResult(
+        result: result ?? this.result,
+      );
+
+  ScanResult copyUsing(void Function(ScanResult$Change change) mutator) {
+    final change = ScanResult$Change._(
+      this.result,
+    );
+    mutator(change);
+    return ScanResult(
+      result: change.result,
+    );
+  }
+
+  @override
+  String toString() => "ScanResult(result: $result)";
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) =>
+      other is ScanResult &&
+      other.runtimeType == runtimeType &&
+      result == other.result;
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode {
+    return result.hashCode;
+  }
+}
+
+class ScanResult$Change {
+  ScanResult$Change._(
+    this.result,
+  );
+
+  Result<DiscoveredDevice, GenericFailure<ScanFailure>?> result;
+}
+
+// ignore: avoid_classes_with_only_static_members
+class ScanResult$ {
+  static final result =
+      Lens<ScanResult, Result<DiscoveredDevice, GenericFailure<ScanFailure>?>>(
+    (resultContainer) => resultContainer.result,
+    (resultContainer, result) => resultContainer.copyWith(result: result),
+  );
+}
+
 abstract class $DiscoveredDevice {
   const $DiscoveredDevice();
 
@@ -15,6 +71,7 @@ abstract class $DiscoveredDevice {
   List<Uuid> get serviceUuids;
   Uint8List get manufacturerData;
   int get rssi;
+  Connectable get connectable;
 
   DiscoveredDevice copyWith({
     String? id,
@@ -23,6 +80,7 @@ abstract class $DiscoveredDevice {
     List<Uuid>? serviceUuids,
     Uint8List? manufacturerData,
     int? rssi,
+    Connectable? connectable,
   }) =>
       DiscoveredDevice(
         id: id ?? this.id,
@@ -31,6 +89,7 @@ abstract class $DiscoveredDevice {
         serviceUuids: serviceUuids ?? this.serviceUuids,
         manufacturerData: manufacturerData ?? this.manufacturerData,
         rssi: rssi ?? this.rssi,
+        connectable: connectable ?? this.connectable,
       );
 
   DiscoveredDevice copyUsing(
@@ -42,6 +101,7 @@ abstract class $DiscoveredDevice {
       this.serviceUuids,
       this.manufacturerData,
       this.rssi,
+      this.connectable,
     );
     mutator(change);
     return DiscoveredDevice(
@@ -51,12 +111,13 @@ abstract class $DiscoveredDevice {
       serviceUuids: change.serviceUuids,
       manufacturerData: change.manufacturerData,
       rssi: change.rssi,
+      connectable: change.connectable,
     );
   }
 
   @override
   String toString() =>
-      "DiscoveredDevice(id: $id, name: $name, serviceData: $serviceData, serviceUuids: $serviceUuids, manufacturerData: $manufacturerData, rssi: $rssi)";
+      "DiscoveredDevice(id: $id, name: $name, serviceData: $serviceData, serviceUuids: $serviceUuids, manufacturerData: $manufacturerData, rssi: $rssi, connectable: $connectable)";
 
   @override
   // ignore: avoid_equals_and_hash_code_on_mutable_classes
@@ -67,8 +128,10 @@ abstract class $DiscoveredDevice {
       name == other.name &&
       const DeepCollectionEquality().equals(serviceData, other.serviceData) &&
       const DeepCollectionEquality().equals(serviceUuids, other.serviceUuids) &&
-      manufacturerData == other.manufacturerData &&
-      rssi == other.rssi;
+      const DeepCollectionEquality()
+          .equals(manufacturerData, other.manufacturerData) &&
+      rssi == other.rssi &&
+      connectable == other.connectable;
 
   @override
   // ignore: avoid_equals_and_hash_code_on_mutable_classes
@@ -78,8 +141,10 @@ abstract class $DiscoveredDevice {
     result = 37 * result + name.hashCode;
     result = 37 * result + const DeepCollectionEquality().hash(serviceData);
     result = 37 * result + const DeepCollectionEquality().hash(serviceUuids);
-    result = 37 * result + manufacturerData.hashCode;
+    result =
+        37 * result + const DeepCollectionEquality().hash(manufacturerData);
     result = 37 * result + rssi.hashCode;
+    result = 37 * result + connectable.hashCode;
     return result;
   }
 }
@@ -92,6 +157,7 @@ class DiscoveredDevice$Change {
     this.serviceUuids,
     this.manufacturerData,
     this.rssi,
+    this.connectable,
   );
 
   String id;
@@ -100,6 +166,7 @@ class DiscoveredDevice$Change {
   List<Uuid> serviceUuids;
   Uint8List manufacturerData;
   int rssi;
+  Connectable connectable;
 }
 
 // ignore: avoid_classes_with_only_static_members
@@ -135,5 +202,11 @@ class DiscoveredDevice$ {
   static final rssi = Lens<DiscoveredDevice, int>(
     (rssiContainer) => rssiContainer.rssi,
     (rssiContainer, rssi) => rssiContainer.copyWith(rssi: rssi),
+  );
+
+  static final connectable = Lens<DiscoveredDevice, Connectable>(
+    (connectableContainer) => connectableContainer.connectable,
+    (connectableContainer, connectable) =>
+        connectableContainer.copyWith(connectable: connectable),
   );
 }

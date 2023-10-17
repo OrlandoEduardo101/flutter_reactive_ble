@@ -5,8 +5,6 @@ import 'package:functional_data/functional_data.dart';
 import 'package:meta/meta.dart';
 
 import '../../reactive_ble_platform_interface.dart';
-import 'generic_failure.dart';
-import 'result.dart';
 
 part 'discovered_device.g.dart';
 
@@ -14,8 +12,10 @@ part 'discovered_device.g.dart';
 
 /// Result of a scan interval.
 @immutable
-class ScanResult {
+@FunctionalData()
+class ScanResult extends $ScanResult {
   final Result<DiscoveredDevice, GenericFailure<ScanFailure>?> result;
+
   const ScanResult({required this.result});
 
   @override
@@ -37,9 +37,12 @@ class DiscoveredDevice extends $DiscoveredDevice {
   final List<Uuid> serviceUuids;
 
   /// Manufacturer specific data. The first 2 bytes are the Company Identifier Codes.
+  @CustomEquality(DeepCollectionEquality())
   final Uint8List manufacturerData;
 
   final int rssi;
+
+  final Connectable connectable;
 
   const DiscoveredDevice({
     required this.id,
@@ -48,6 +51,7 @@ class DiscoveredDevice extends $DiscoveredDevice {
     required this.manufacturerData,
     required this.rssi,
     required this.serviceUuids,
+    this.connectable = Connectable.unknown,
   });
 }
 
@@ -68,3 +72,6 @@ enum ConnectionStatus {
 
 /// Failure type of device discovery.
 enum ScanFailure { unknown }
+
+/// Shows if the device is ready to be connected to from a discovery perspective
+enum Connectable { unknown, unavailable, available }
